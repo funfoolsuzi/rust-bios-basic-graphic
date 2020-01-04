@@ -4,10 +4,7 @@
 #![no_std]
 
 global_asm!(include_str!("stage1.s"));
-
-// #[no_mangle]
-// extern "C" fn main() {
-// }
+global_asm!(include_str!("stage2.s"));
 
 #[panic_handler]
 #[no_mangle]

@@ -11,96 +11,194 @@ _start:
     movw %ax, %fs
     movw %ax, %gs
     cld
-/*    // enable a20
-_enable_a20:
+
+enable_a20:
     inb $0x92, %al
     testb $2, %al
-    jnz _enable_a20_end
+    jnz ea_end
     orb $2, %al
     andb $0xFE, %al
     outb %al, $0x92
-_enable_a20_end:*/
-    // set up stack
+ea_end:
+
+setup_stack:
     movw $0x7c00, %sp
     movw %sp, %bp
 
-    movl $0xe820, %eax
-    movl $0, %ebx
-    movl $40, %ecx
-    movl $0x534D4150, %edx
-    leal smap, %edi
+enable_protected_mode:
+    cli
+    push %ds
+    push %es
+    lgdt gdt32
 
-    int $0x15
-    jc _fail
-    leaw smap, %si
-    movw 10(%si), %dx
-    movw 8(%si), %ax
-    callw _print_int_on_stack
-    jmp _halt
+    movl %cr0, %eax 
+    orb $1, %al // cr0 bit 0 => PE
+    movl %eax, %cr0
 
-.lcomm smap, 40
+during_protected_mode:
+    movw $0x10, %bx // 0b00001000 for segment selector; least significant 3 bits are RPL and TI
+    movw %bx, %ds
+    movw %bx, %es
+
+enter_unreal_mode:
+    andl $0xfe, %eax
+    movl %eax, %cr0
+    pop %es
+    pop %ds
+    sti
+
+check_13h_extensions:
+    movb $0x41, %ah
+    movw $0x55aa, %bx
+    int $0x13
+    jc no_in13h_extensions
+
+load_rest:
+    leal _rest_of_bootloader_start_addr, %eax
+
+    movw %ax, dap_buffer_offset
+
+    leal _rest_of_bootloader_end_addr, %ebx
+    subl %eax, %ebx
+    shrl $9, %ebx
+    movw %bx, dap_num_blocks
+
+    leal _start, %ebx
+    subl %ebx, %eax
+    shrl $9, %eax
+    movl %eax, dap_start_lba
+
+    lea dap, %si
+    movb $0x42, %ah
+    int $0x13
+    jc rest_of_bootloader_load_failed
+
+jump_to_2nd_stage:
+    lea stage2, %eax
+    jmpl *%eax
+    
+// functions
 
 /*
-_print_int_on_stack:
-params: 
-%dx:%ax: number to print
+PARAM %al
+CLOBBER %ah
 */
-.lcomm print_buffer, 20
-
-_print_int_on_stack:
-    pushw %bx // divisor
-    pushw %cx // counter
-    pushw %di
-    pushw %si
-    movw $0, %cx
-    _print_int_on_stack_load_remainder_loop:
-    movw $0xa, %bx // set divisor to 10
-    divw %bx
-    addw $0x30, %dx
-    leaw print_buffer, %bx // load buffer base
-    movw %cx, %di // load buffer index from %cx to %di
-    movb %dl, (%bx, %di, 1)
-    incw %cx
-    cmpw $19, %cx // make sure counter(%cx) is not reaching 20 limit
-    je _print_int_on_stack_finish
-    movw %ax, %dx
-    or %dx, %dx // make sure quotient is not zero
-    movw $0, %dx
-    jne _print_int_on_stack_load_remainder_loop
-    _print_int_on_stack_finish:
-    leaw (%bx, %di, 1), %si
-    std
+real_mode_print_char:
     movb $0xe, %ah
-    _print_single_digit:
-    lodsb
-    or %al, %al
-    jz _print_int_on_stack_cleanup
     int $0x10
-    jmp _print_single_digit
-    _print_int_on_stack_cleanup:
-    cld
-    popw %si
-    popw %di
-    popw %cx
-    popw %bx
-    retw
+    ret
 
-_fail:
-    movb $0xe, %ah
-    movb $0x46, %al
-    int $0x10
-    jmp _halt
-
-_break:
+/*
+PARAM %al
+CLOBBER %ah
+*/
+real_mode_print_hex_char:
     pushw %ax
-    movb $0xe, %ah
-    movb $0x42, %al
-    int $0x10
+    shrb $4, %al
+    call real_mode_print_hex_oct
     popw %ax
-    retw
+    call real_mode_print_hex_oct
+    movw $' ', %ax
+    call real_mode_print_char
+    ret
 
-_halt:
-    hlt
+real_mode_print_hex_oct:
+    andb $0xf, %al
+    cmpb $0xa, %al
+    js _rmpho_below_a
+    addb $0x37, %al
+    call real_mode_print_char
+    jmp _rmpho_end
+    _rmpho_below_a:
+    addb $0x30, %al
+    call real_mode_print_char 
+    _rmpho_end:
+    ret
+
+
+/*
+PARAM %si
+CLOBBER %ax
+*/
+real_mode_print:
+    cld
+    _rmp_loop:
+    lodsb
+    testb %al, %al
+    jz _rmp_end
+    call real_mode_print_char
+    call _rmp_loop
+    _rmp_end:
+    ret
+
+/*
+PARAM %si, %cx
+CLOBBER %ax
+*/
+real_mode_print_hex:
+    cld
+rmph_loop:
+    lodsb
+    testw %cx, %cx
+    jz rmph_end
+    call real_mode_print_hex_char
+    decw %cx
+    call rmph_loop
+rmph_end:
+    ret
+
+spin:
+    jmp spin
+
+real_mode_error:
+    call real_mode_print
+    jmp spin
+
+no_in13h_extensions:
+    lea no_int13h_extensions_str, %si
+    call real_mode_error
+
+rest_of_bootloader_load_failed:
+    lea rest_of_bootloader_load_failed_str, %si
+    call real_mode_error
+
+// data
+
+no_int13h_extensions_str: .asciz "No support for int13h extensions"
+rest_of_bootloader_load_failed_str: .asciz "Failed to load rest of bootloader"
+
+gdt32:
+    .quad // first entry always empty
+code_desc:
+    .byte 0xff
+    .byte 0xff // 0,1,6[4:7] segment limit set to max
+    .byte 0
+    .byte 0
+    .byte 0
+    .byte 0x9a // 5 0b10011010 bit 4 set => code segment
+    .byte 0xcf // 6 0b11001111
+    .byte 0 // 2,3,4,7 segment base set to beginning
+data_desc:
+    .byte 0xff
+    .byte 0xff
+    .byte 0
+    .byte 0
+    .byte 0
+    .byte 0x92 // 5 0b10010010 bit 4 cleared => data segment
+    .byte 0xcf
+    .byte 0
+
+dap: // disk access packet
+    .byte 0x10 // size of this dap(16 bytes)
+    .byte 0
+dap_num_blocks:
+    .2byte 0 // # of sectors
+dap_buffer_offset:
+    .2byte 0 // offset of memory buffer
+    .2byte 0 // segment of memory buffer
+dap_start_lba:
+    .8byte 0 // start lba(logical block address)
 
 .= 510
 .2byte 0xaa55
+
