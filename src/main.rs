@@ -3,8 +3,13 @@
 #![no_main]
 #![no_std]
 
+#[cfg(target_arch = "x86_64")]
 global_asm!(include_str!("stage1.s"));
+#[cfg(target_arch = "x86_64")]
 global_asm!(include_str!("stage2.s"));
+
+#[cfg(target_arch = "arm")]
+global_asm!(include_str!("stage1arm.s"));
 
 #[panic_handler]
 #[no_mangle]

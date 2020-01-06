@@ -1,0 +1,21 @@
+{
+    "llvm-target": "arm-unknown-none-elf32",
+    "data-layout": "e-m:e-p:32:32-n8:16:32-S0",
+    "linker-flavor": "ld.lld",
+    "linker": "rust-lld",
+    "pre-link-args": {
+        "ld.lld": [
+	    "--script=linker.ld"
+	]
+    },
+    "target-endian": "little",
+    "target-pointer-width": "32",
+    "target-c-int-width": "32",
+    "arch": "arm",
+    "os": "none",
+    "features": "-mclass,-thumb-mode,+soft-float",
+    "disable-redzone": true,
+    "panic": "abort",
+    "executables": true,
+	"relocation_model": "static"
+}
